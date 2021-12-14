@@ -11,11 +11,12 @@ from meerschaum.utils.typing import Optional, Dict, Any
 from meerschaum.config._paths import PLUGINS_TEMP_RESOURCES_PATH
 import pathlib
 
+__version__ = '0.0.5'
 TMP_PATH = PLUGINS_TEMP_RESOURCES_PATH / 'TX-covid_data'
 XLSX_URL = "https://www.dshs.texas.gov/coronavirus/TexasCOVID19DailyCountyCaseCountData.xlsx"
 XLSX_PATH = TMP_PATH / 'Texas COVID-19 Case Count Data by County.xlsx'
 COUNTIES_PATH = pathlib.Path(__file__).parent / 'counties.csv'
-required = ['requests', 'python-dateutil', 'pandas', 'duckdb']
+required = ['requests', 'python-dateutil', 'pandas', 'duckdb', 'openpyxl']
 
 def register(pipe: meerschaum.Pipe, **kw):
     from meerschaum.utils.warnings import warn
@@ -54,13 +55,20 @@ def register(pipe: meerschaum.Pipe, **kw):
     }
 
 
-def fetch(pipe, **kw):
+def fetch(
+        pipe: meerschaum.Pipe,
+        begin: Optional[datetime.datetime] = None,
+        end: Optional[datetime.datetime] = None,
+        debug: bool = False,
+        **kw
+    ):
     import pandas as pd
     from meerschaum.utils.misc import wget
     from dateutil import parser
     import datetime
     import duckdb
     import textwrap
+    from meerschaum.utils.debug import dprint
     TMP_PATH.mkdir(exist_ok=True, parents=True)
     fips = pipe.parameters['TX-covid']['fips']
     fips_where = "'" + "', '".join(fips) + "'"
@@ -73,17 +81,28 @@ def fetch(pipe, **kw):
         'cases': int,
     }
 
-    #  wget(XLSX_URL, XLSX_PATH)
+    wget(XLSX_URL, XLSX_PATH, debug=debug)
     df = pd.read_excel(XLSX_PATH, skiprows=[0], header=1, nrows=254)
     data = {'date': [], 'county': [], 'cases': [],}
     counties = list(df['County Name'])
+
+    begin = begin if begin is not None else (pipe.get_sync_time(debug=debug) if end is None else None)
+    if end is not None and begin is not None and end < begin:
+        begin = end - datetime.timedelta(days=1)
     for col in df.columns[1:]:
+        date = parser.parse(col[len('Cases '):])
+        if begin is not None and date < begin:
+            continue
+        if end is not None and date > end:
+            break
         for i, county in enumerate(counties):
-            data['date'].append(parser.parse(col[len('Cases '):]))
+            data['date'].append(date)
             data['county'].append(county)
             data['cases'].append(df[col][i])
 
     clean_df = pd.DataFrame(data).astype({col: typ for col, typ in dtypes.items() if col in data})
+    if debug:
+        print(clean_df)
     query = textwrap.dedent(f"""
     SELECT
         CAST(d.date AS DATE) AS date, 
@@ -96,6 +115,15 @@ def fetch(pipe, **kw):
         AND d.cases IS NOT NULL
         AND d.date IS NOT NULL"""
     )
-    joined_df = duckdb.query(query).df()
+    if begin is not None:
+        query += f"\n    AND CAST(d.date AS DATE) >= CAST('{begin}' AS DATE)"
+    if end is not None:
+        query += f"\n    AND CAST(d.date AS DATE) <= CAST('{end}' AS DATE)"
+    if debug:
+        print(query)
+
+    joined_df = duckdb.query(query).df()[dtypes.keys()].astype(dtypes)
+    if debug:
+        print(joined_df)
     return joined_df
 
