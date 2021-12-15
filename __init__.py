@@ -9,9 +9,10 @@ Fetch county-level COVID-19 data for the state of Texas.
 from __future__ import annotations
 from meerschaum.utils.typing import Optional, Dict, Any
 from meerschaum.config._paths import PLUGINS_TEMP_RESOURCES_PATH
+import datetime
 import pathlib
 
-__version__ = '0.0.5'
+__version__ = '0.0.6'
 TMP_PATH = PLUGINS_TEMP_RESOURCES_PATH / 'TX-covid_data'
 XLSX_URL = "https://www.dshs.texas.gov/coronavirus/TexasCOVID19DailyCountyCaseCountData.xlsx"
 XLSX_PATH = TMP_PATH / 'Texas COVID-19 Case Count Data by County.xlsx'
@@ -116,6 +117,7 @@ def fetch(
         AND d.date IS NOT NULL"""
     )
     if begin is not None:
+        begin -= datetime.timedelta(days=2)
         query += f"\n    AND CAST(d.date AS DATE) >= CAST('{begin}' AS DATE)"
     if end is not None:
         query += f"\n    AND CAST(d.date AS DATE) <= CAST('{end}' AS DATE)"
